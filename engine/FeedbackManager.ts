@@ -53,6 +53,13 @@ export class FeedbackManager {
     if (this.soundManager) this.soundManager.play_dramatic('Step');
   }
 
+  /** Call when player lands; impactSpeed is downward velocity (positive = hard landing). */
+  onLand(impactSpeed: number): void {
+    this.audio.play('land');
+    const amount = Math.min(1, 0.2 + Math.abs(impactSpeed) / 18);
+    this.addShake(amount);
+  }
+
   onSelect(): void {
     this.audio.play('select');
     this.addShake(0.15);

@@ -3,7 +3,7 @@
  * Uses Web Audio API with procedural (synthesized) sounds so no asset files are required.
  */
 
-export type SoundId = 'jump' | 'place' | 'break' | 'select';
+export type SoundId = 'jump' | 'place' | 'break' | 'select' | 'land';
 
 export interface AudioManagerOptions {
   /** Pitch random range: play at basePitch * (1 + random in [-pitchVariance, +pitchVariance]). */
@@ -62,6 +62,10 @@ export class AudioManager {
         break;
       case 'select':
         this.playTone(ctx, gainNode, now, 400, 0.02, 0.05, rate);
+        break;
+      case 'land':
+        this.playTone(ctx, gainNode, now, 60, 0.01, 0.12, rate * 0.7);
+        this.playNoise(ctx, gainNode, now, 0.04, 0.25, rate);
         break;
       default:
         break;

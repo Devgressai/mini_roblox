@@ -72,6 +72,26 @@ let placeIdCounter = 0;
 let cleanupHotbar: (() => void) | undefined;
 let stepCooldown = 0;
 const STEP_INTERVAL = 0.2;
+let wasGrounded = true;
+let prevVy = 0;
+let landSquashTime = 0;
+let jumpStretchTime = 0;
+let canDoubleJump = false;
+const LAND_SQUASH_DURATION = 0.14;
+const JUMP_STRETCH_DURATION = 0.1;
+const DOUBLE_JUMP_VEL = JUMP_VEL * 0.92;
+const CAMERA_LEAD = 0.14;
+
+interface BreakParticle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  maxLife: number;
+  color: string;
+}
+let breakParticles: BreakParticle[] = [];
 
 /** Returns the block directly beneath the player (the one they're standing on or landing on). */
 function getBlockBeneathPlayer(): Block | undefined {
@@ -168,9 +188,27 @@ function placeBlock(): void {
   juice.onBlockPlaced(id, gameTime);
 }
 
+function spawnBreakParticles(cx: number, cy: number, color: string): void {
+  for (let i = 0; i < 8; i++) {
+    const angle = (i / 8) * Math.PI * 2 + Math.random() * 0.5;
+    const speed = 2 + Math.random() * 3;
+    breakParticles.push({
+      x: cx,
+      y: cy,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed - 1,
+      life: 0.35 + Math.random() * 0.15,
+      maxLife: 0.5,
+      color,
+    });
+  }
+}
+
 function breakBlock(): void {
   const b = findBlockInFront();
   if (!b || b.id.startsWith('plat_')) return;
+  const colors = blockColor(b.material_type);
+  spawnBreakParticles(b.x + b.w / 2, b.y + b.h / 2, colors.fill);
   blocks = blocks.filter((bl) => bl.id !== b.id);
   removeEntity(world, b.id);
   juice.onBlockBroken();
@@ -254,6 +292,12 @@ export function startGame1(mount: HTMLElement): () => void {
       if (player.grounded && isKeyJustPressed('Space')) {
         player.velocity.y = JUMP_VEL;
         player.grounded = false;
+        jumpStretchTime = JUMP_STRETCH_DURATION;
+        feedback.onJump();
+      } else if (!player.grounded && canDoubleJump && isKeyJustPressed('Space')) {
+        player.velocity.y = DOUBLE_JUMP_VEL;
+        canDoubleJump = false;
+        jumpStretchTime = JUMP_STRETCH_DURATION * 0.7;
         feedback.onJump();
       }
       if (!player.grounded) player.velocity.y -= GRAVITY * dt;
@@ -261,6 +305,7 @@ export function startGame1(mount: HTMLElement): () => void {
       player.position.x += player.velocity.x * dt;
       player.position.y += player.velocity.y * dt;
 
+      prevVy = player.velocity.y;
       const coll = checkBlockCollision(
         player.position.x,
         player.position.y,
@@ -273,13 +318,32 @@ export function startGame1(mount: HTMLElement): () => void {
       if (coll.grounded && player.velocity.y <= 0) player.velocity.y = 0;
       if (coll.grounded && player.velocity.y > 0) player.grounded = false;
 
+      if (coll.grounded && !wasGrounded && prevVy < -3) {
+        feedback.onLand(prevVy);
+        landSquashTime = LAND_SQUASH_DURATION;
+      }
+      if (wasGrounded && !coll.grounded) canDoubleJump = true;
+      if (coll.grounded) canDoubleJump = false;
+      wasGrounded = coll.grounded;
+
+      landSquashTime = Math.max(0, landSquashTime - dt);
+      jumpStretchTime = Math.max(0, jumpStretchTime - dt);
+
+      breakParticles = breakParticles.filter((p) => {
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vy += 12 * dt;
+        p.life -= dt;
+        return p.life > 0;
+      });
+
       stepCooldown -= dt;
       if (coll.grounded && Math.abs(player.position.x - prevX) > 0.01 && stepCooldown <= 0) {
         feedback.onStep();
         stepCooldown = STEP_INTERVAL;
       }
 
-      camera.centerX = player.position.x;
+      camera.centerX = player.position.x + player.velocity.x * CAMERA_LEAD;
       camera.centerY = Math.max(GROUND_Y + 2, player.position.y);
       worldStep(world, dt, player);
       endInputFrame();
@@ -322,8 +386,31 @@ export function startGame1(mount: HTMLElement): () => void {
         }, true);
       }
 
+      for (const p of breakParticles) {
+        const { sx, sy } = worldToScreen(camera, p.x, p.y, true);
+        const alpha = p.life / p.maxLife;
+        const size = 3 + (1 - alpha) * 2;
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = alpha;
+        ctx.fillRect(sx - size / 2, sy - size / 2, size, size);
+        ctx.globalAlpha = 1;
+      }
+
+      let scaleX = 1;
+      let scaleY = 1;
+      if (landSquashTime > 0) {
+        const t = 1 - landSquashTime / LAND_SQUASH_DURATION;
+        const e = 1 - (1 - t) * (1 - t);
+        scaleX = 1 + 0.25 * (1 - e);
+        scaleY = 1 - 0.3 * (1 - e);
+      } else if (jumpStretchTime > 0) {
+        const t = 1 - jumpStretchTime / JUMP_STRETCH_DURATION;
+        const e = 1 - (1 - t) * (1 - t);
+        scaleX = 1 - 0.12 * (1 - e);
+        scaleY = 1 + 0.18 * (1 - e);
+      }
       const facingRight = player.velocity.x >= 0;
-      drawPlayerSideView(ctx, camera, player.position.x, player.position.y, PLAYER_W, PLAYER_H, facingRight);
+      drawPlayerSideView(ctx, camera, player.position.x, player.position.y, PLAYER_W * scaleX, PLAYER_H * scaleY, facingRight);
 
       ctx.restore();
 
@@ -334,7 +421,7 @@ export function startGame1(mount: HTMLElement): () => void {
       ctx.font = '14px system-ui';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
-      ctx.fillText('← → move · Space jump · E place · Q break · 1–5 hotbar', 12, 8);
+      ctx.fillText('← → move · Space jump (double jump in air) · E place · Q break · 1–5 hotbar', 12, 8);
       if (blockBeneath) {
         ctx.fillStyle = '#94a3b8';
         ctx.fillText(`Standing on: ${blockBeneath.material_type}`, 12, 22);
