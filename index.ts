@@ -7,8 +7,8 @@ import { startGame1 } from './games/game1.js';
 import { startGame2 } from './games/game2.js';
 
 const games: GameEntry[] = [
-  { id: 'game1', name: 'Game 1 — Platformer (WASD + Jump)', start: startGame1 },
-  { id: 'game2', name: 'Game 2 — Coin Collector', start: startGame2 },
+  { id: 'game1', name: 'Game 1 — Platformer (Arrows + Jump)', start: startGame1 },
+  { id: 'game2', name: 'Game 2 — Coin Collector (Arrows)', start: startGame2 },
 ];
 
 const root = document.getElementById('app');

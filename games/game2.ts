@@ -1,5 +1,5 @@
 /**
- * Game 2 - 2D top-down coin collector. WASD move, collect coins. Graphics: player, coins, floor.
+ * Game 2 - 2D top-down coin collector. Arrow keys move, collect coins. Graphics: player, coins, floor.
  */
 
 import { startGameLoop, stopGameLoop } from '../engine/GameLoop.js';
@@ -95,8 +95,8 @@ export function startGame2(mount: HTMLElement): () => void {
   startGameLoop({
     update(dt) {
       gameTime += dt;
-      const vx = (isKeyDown('KeyD') ? 1 : 0) - (isKeyDown('KeyA') ? 1 : 0);
-      const vz = (isKeyDown('KeyS') ? 1 : 0) - (isKeyDown('KeyW') ? 1 : 0);
+      const vx = (isKeyDown('ArrowRight') ? 1 : 0) - (isKeyDown('ArrowLeft') ? 1 : 0);
+      const vz = (isKeyDown('ArrowDown') ? 1 : 0) - (isKeyDown('ArrowUp') ? 1 : 0);
       player.velocity.x = vx * MOVE_SPEED;
       player.velocity.z = vz * MOVE_SPEED;
       player.position.x += player.velocity.x * dt;
@@ -161,7 +161,7 @@ export function startGame2(mount: HTMLElement): () => void {
       const coinsLeft = world.entities.filter((e) => e.type === 'trigger').length;
       ctx.fillStyle = '#e2e8f0';
       ctx.font = '14px system-ui';
-      ctx.fillText(`Coins left: ${coinsLeft} · WASD move`, 12, 28);
+      ctx.fillText(`Coins left: ${coinsLeft} · Arrow keys move`, 12, 28);
     },
   });
 
