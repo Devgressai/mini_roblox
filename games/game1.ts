@@ -17,7 +17,7 @@ import {
   createCamera,
   worldToScreen,
   drawRect,
-  drawPlayerSideView,
+  drawRocketSideView,
   type Camera2D,
 } from '../engine/Renderer2D.js';
 import { AudioManager } from '../engine/AudioManager.js';
@@ -92,6 +92,31 @@ interface BreakParticle {
   color: string;
 }
 let breakParticles: BreakParticle[] = [];
+
+interface Star {
+  id: string;
+  x: number;
+  y: number;
+  collected: boolean;
+}
+let stars: Star[] = [];
+let score = 0;
+let fuel = 1;
+const FUEL_MAX = 1;
+const FUEL_DRAIN_RATE = 0.35;
+const FUEL_REFILL_RATE = 0.15;
+const STAR_RADIUS = 0.35;
+
+interface ExhaustParticle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+}
+let exhaustParticles: ExhaustParticle[] = [];
+const EXHAUST_SPAWN_RATE = 0.02;
+let exhaustAccum = 0;
 
 /** Returns the block directly beneath the player (the one they're standing on or landing on). */
 function getBlockBeneathPlayer(): Block | undefined {
@@ -240,6 +265,22 @@ export function startGame1(mount: HTMLElement): () => void {
     new Block({ id: 'plat_6', x: -6, y: 2.5, w: 4, h: 0.6, material_type: 'slime' }),
   ];
 
+  score = 0;
+  fuel = FUEL_MAX;
+  exhaustAccum = 0;
+  stars = [
+    { id: 's1', x: 7, y: 4.5, collected: false },
+    { id: 's2', x: 12, y: 4, collected: false },
+    { id: 's3', x: 11.5, y: 5.5, collected: false },
+    { id: 's4', x: 22, y: 5, collected: false },
+    { id: 's5', x: 28, y: 4, collected: false },
+    { id: 's6', x: -4, y: 5.5, collected: false },
+    { id: 's7', x: 17, y: 6, collected: false },
+    { id: 's8', x: 0, y: 8, collected: false },
+  ];
+  breakParticles = [];
+  exhaustParticles = [];
+
   world = createWorld();
   addEntity(world, {
     id: 'player',
@@ -289,16 +330,22 @@ export function startGame1(mount: HTMLElement): () => void {
       const vx = (isKeyDown('ArrowRight') ? 1 : 0) - (isKeyDown('ArrowLeft') ? 1 : 0);
       const prevX = player.position.x;
       player.velocity.x = vx * MOVE_SPEED;
-      if (player.grounded && isKeyJustPressed('Space')) {
+      if (player.grounded && isKeyJustPressed('Space') && fuel > 0.05) {
         player.velocity.y = JUMP_VEL;
         player.grounded = false;
         jumpStretchTime = JUMP_STRETCH_DURATION;
         feedback.onJump();
-      } else if (!player.grounded && canDoubleJump && isKeyJustPressed('Space')) {
+      } else if (!player.grounded && canDoubleJump && isKeyJustPressed('Space') && fuel > 0.05) {
         player.velocity.y = DOUBLE_JUMP_VEL;
         canDoubleJump = false;
         jumpStretchTime = JUMP_STRETCH_DURATION * 0.7;
         feedback.onJump();
+      }
+      const thrusting = !player.grounded && player.velocity.y > 0.5;
+      if (thrusting) {
+        fuel = Math.max(0, fuel - FUEL_DRAIN_RATE * dt);
+      } else if (player.grounded) {
+        fuel = Math.min(FUEL_MAX, fuel + FUEL_REFILL_RATE * dt);
       }
       if (!player.grounded) player.velocity.y -= GRAVITY * dt;
 
@@ -333,6 +380,38 @@ export function startGame1(mount: HTMLElement): () => void {
         p.x += p.vx * dt;
         p.y += p.vy * dt;
         p.vy += 12 * dt;
+        p.life -= dt;
+        return p.life > 0;
+      });
+
+      for (const star of stars) {
+        if (star.collected) continue;
+        const dx = player.position.x - star.x;
+        const dy = player.position.y - PLAYER_H * 0.5 - star.y;
+        if (Math.sqrt(dx * dx + dy * dy) < PLAYER_W * 0.6 + STAR_RADIUS) {
+          star.collected = true;
+          score += 100;
+          feedback.onSelect();
+        }
+      }
+
+      exhaustAccum += dt;
+      if (thrusting && exhaustAccum >= EXHAUST_SPAWN_RATE) {
+        exhaustAccum = 0;
+        const dir = player.velocity.x >= 0 ? 1 : -1;
+        for (let i = 0; i < 2; i++) {
+          exhaustParticles.push({
+            x: player.position.x + (Math.random() - 0.5) * PLAYER_W * 0.5,
+            y: player.position.y - PLAYER_H,
+            vx: (Math.random() - 0.5) * 2 - dir * 0.5,
+            vy: -2 - Math.random() * 3,
+            life: 0.25 + Math.random() * 0.15,
+          });
+        }
+      }
+      exhaustParticles = exhaustParticles.filter((p) => {
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
         p.life -= dt;
         return p.life > 0;
       });
@@ -396,6 +475,34 @@ export function startGame1(mount: HTMLElement): () => void {
         ctx.globalAlpha = 1;
       }
 
+      for (const p of exhaustParticles) {
+        const { sx, sy } = worldToScreen(camera, p.x, p.y, true);
+        const alpha = p.life / 0.35;
+        ctx.fillStyle = `rgba(251, 146, 60, ${alpha * 0.8})`;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 2 + (1 - alpha) * 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      for (const star of stars) {
+        if (star.collected) continue;
+        const { sx, sy } = worldToScreen(camera, star.x, star.y, true);
+        const r = STAR_RADIUS * camera.pixelsPerUnit;
+        const bounce = Math.sin(gameTime * 3) * 3;
+        ctx.fillStyle = '#fef08a';
+        ctx.strokeStyle = '#eab308';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(sx, sy + bounce, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#fbbf24';
+        ctx.font = `${Math.round(r * 0.8)}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('★', sx, sy + bounce);
+      }
+
       let scaleX = 1;
       let scaleY = 1;
       if (landSquashTime > 0) {
@@ -410,21 +517,35 @@ export function startGame1(mount: HTMLElement): () => void {
         scaleY = 1 + 0.18 * (1 - e);
       }
       const facingRight = player.velocity.x >= 0;
-      drawPlayerSideView(ctx, camera, player.position.x, player.position.y, PLAYER_W * scaleX, PLAYER_H * scaleY, facingRight);
+      const thrusting = !player.grounded && player.velocity.y > 0.5;
+      drawRocketSideView(ctx, camera, player.position.x, player.position.y, PLAYER_W * scaleX, PLAYER_H * scaleY, facingRight, thrusting, gameTime);
 
       ctx.restore();
 
       const blockBeneath = getBlockBeneathPlayer();
-      ctx.fillStyle = 'rgba(0,0,0,0.6)';
-      ctx.fillRect(0, 0, w, 32);
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(0, 0, w, 44);
       ctx.fillStyle = '#e2e8f0';
       ctx.font = '14px system-ui';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
-      ctx.fillText('← → move · Space jump (double jump in air) · E place · Q break · 1–5 hotbar', 12, 8);
+      ctx.fillText('← → move · Space boost (double boost in air) · E place · Q break · 1–5 hotbar', 12, 8);
+      ctx.fillStyle = '#fbbf24';
+      ctx.fillText(`★ Score: ${score}`, 12, 24);
+      const fuelPct = Math.max(0, Math.min(1, fuel));
+      ctx.fillStyle = '#334155';
+      ctx.fillRect(w - 152, 8, 140, 12);
+      ctx.fillStyle = fuelPct > 0.25 ? '#22c55e' : fuelPct > 0.1 ? '#eab308' : '#ef4444';
+      ctx.fillRect(w - 150, 10, 136 * fuelPct, 8);
+      ctx.strokeStyle = '#64748b';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(w - 152, 8, 140, 12);
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '11px system-ui';
+      ctx.fillText('Fuel', w - 148, 18);
       if (blockBeneath) {
         ctx.fillStyle = '#94a3b8';
-        ctx.fillText(`Standing on: ${blockBeneath.material_type}`, 12, 22);
+        ctx.fillText(`On: ${blockBeneath.material_type}`, 12, 38);
       }
     },
   });

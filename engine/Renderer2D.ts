@@ -115,6 +115,86 @@ export function drawPlayerSideView(
   ctx.stroke();
 }
 
+/**
+ * Draw rocket with fire exhaust. thrusting = true when boosting (flame larger).
+ */
+export function drawRocketSideView(
+  ctx: CanvasRenderingContext2D,
+  cam: Camera2D,
+  wx: number,
+  wy: number,
+  width: number,
+  height: number,
+  facingRight: boolean,
+  thrusting: boolean,
+  gameTime: number
+): void {
+  const { sx, sy } = worldToScreen(cam, wx, wy, true);
+  const w = width * cam.pixelsPerUnit;
+  const h = height * cam.pixelsPerUnit;
+  const x = sx - w / 2;
+  const y = sy - h;
+  const dir = facingRight ? 1 : -1;
+
+  const noseH = h * 0.35;
+  const bodyH = h * 0.5;
+  const finH = h * 0.15;
+
+  ctx.save();
+  if (!facingRight) {
+    ctx.translate(sx, sy);
+    ctx.scale(-1, 1);
+    ctx.translate(-sx, -sy);
+  }
+
+  const l = x;
+  const r = x + w;
+  const midX = (l + r) / 2;
+
+  ctx.fillStyle = '#94a3b8';
+  ctx.strokeStyle = '#64748b';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(midX, y + h);
+  ctx.lineTo(midX - w * 0.35, y + h - finH);
+  ctx.lineTo(midX - w * 0.25, y + bodyH);
+  ctx.lineTo(midX - w * 0.2, y + noseH);
+  ctx.lineTo(midX, y);
+  ctx.lineTo(midX + w * 0.2, y + noseH);
+  ctx.lineTo(midX + w * 0.25, y + bodyH);
+  ctx.lineTo(midX + w * 0.35, y + h - finH);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = '#f97316';
+  ctx.strokeStyle = '#ea580c';
+  ctx.beginPath();
+  ctx.arc(midX, y + noseH * 0.6, w * 0.12, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  const flameLen = thrusting ? h * (0.5 + 0.3 * Math.sin(gameTime * 25)) : h * (0.15 + 0.08 * Math.sin(gameTime * 20));
+  const flameW = thrusting ? w * 0.5 : w * 0.3;
+  const flicker = 1 + 0.15 * Math.sin(gameTime * 30);
+  ctx.fillStyle = `rgba(251, 191, 36, ${0.9 * flicker})`;
+  ctx.beginPath();
+  ctx.moveTo(midX - flameW * 0.5, y + h);
+  ctx.lineTo(midX, y + h + flameLen * (0.6 + 0.2 * Math.sin(gameTime * 22)));
+  ctx.lineTo(midX + flameW * 0.5, y + h);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = `rgba(239, 68, 68, ${0.7 * flicker})`;
+  ctx.beginPath();
+  ctx.moveTo(midX - flameW * 0.35, y + h);
+  ctx.lineTo(midX, y + h + flameLen * 0.5);
+  ctx.lineTo(midX + flameW * 0.35, y + h);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+}
+
 export function drawPlayerTopDown(
   ctx: CanvasRenderingContext2D,
   cam: Camera2D,
