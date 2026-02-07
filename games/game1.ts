@@ -28,13 +28,25 @@ import { Block, type BlockMaterialType } from '../engine/Block.js';
 import { Inventory, type ItemId } from '../engine/Inventory.js';
 import { createHotbar } from '../ui/Hotbar.js';
 import { Juice } from '../engine/Juice.js';
+import {
+  LEVELS,
+  getMegaCoins,
+  addMegaCoins,
+  spendMegaCoins,
+  getUpgrades,
+  setSuperPackOwned,
+  type LevelData,
+} from './levels.js';
 
 const PLAYER_W = 0.8;
 const PLAYER_H = 1.2;
+const BASE_JUMP_VEL = 10;
 const MOVE_SPEED = 6;
-const JUMP_VEL = 10;
 const GRAVITY = 22;
 const GROUND_Y = 0;
+const SUPER_PACK_MULT = 1.4;
+const SUPER_PACK_COST = 5;
+const MEGA_COIN_RADIUS = 0.45;
 const PLACE_REACH = 2.5;
 const BLOCK_SIZE = 1;
 
@@ -79,8 +91,9 @@ let jumpStretchTime = 0;
 let canDoubleJump = false;
 const LAND_SQUASH_DURATION = 0.14;
 const JUMP_STRETCH_DURATION = 0.1;
-const DOUBLE_JUMP_VEL = JUMP_VEL * 0.92;
 const CAMERA_LEAD = 0.14;
+let JUMP_VEL = BASE_JUMP_VEL;
+let DOUBLE_JUMP_VEL = BASE_JUMP_VEL * 0.92;
 
 interface BreakParticle {
   x: number;
@@ -99,8 +112,20 @@ interface Star {
   y: number;
   collected: boolean;
 }
+interface MegaCoin {
+  id: string;
+  x: number;
+  y: number;
+  collected: boolean;
+}
 let stars: Star[] = [];
+let megaCoins: MegaCoin[] = [];
 let score = 0;
+let currentLevelIndex = 0;
+let levelCompleteShown = false;
+let shopVisible = false;
+let levelCompleteOverlay: HTMLElement | null = null;
+let shopOverlay: HTMLElement | null = null;
 let fuel = 1;
 const FUEL_MAX = 1;
 const FUEL_DRAIN_RATE = 0.35;
@@ -117,6 +142,160 @@ interface ExhaustParticle {
 let exhaustParticles: ExhaustParticle[] = [];
 const EXHAUST_SPAWN_RATE = 0.02;
 let exhaustAccum = 0;
+
+function applyUpgrades(): void {
+  const u = getUpgrades();
+  JUMP_VEL = BASE_JUMP_VEL * (u.superPack ? SUPER_PACK_MULT : 1);
+  DOUBLE_JUMP_VEL = JUMP_VEL * 0.92;
+}
+
+function loadLevel(wrapper: HTMLElement, levelIndex: number): void {
+  if (levelIndex < 0 || levelIndex >= LEVELS.length) return;
+  currentLevelIndex = levelIndex;
+  levelCompleteShown = false;
+  const level = LEVELS[levelIndex];
+  blocks = level.blocks.map((b) => new Block(b));
+  stars = level.stars.map((s, i) => ({ id: `star_${levelIndex}_${i}`, x: s.x, y: s.y, collected: false }));
+  megaCoins = level.megaCoins.map((m, i) => ({ id: `mega_${levelIndex}_${i}`, x: m.x, y: m.y, collected: false }));
+  score = 0;
+  fuel = FUEL_MAX;
+  breakParticles = [];
+  exhaustParticles = [];
+  wasGrounded = true;
+  canDoubleJump = false;
+  landSquashTime = 0;
+  jumpStretchTime = 0;
+  placeIdCounter = 0;
+
+  player.position.x = 0;
+  player.position.y = GROUND_Y + PLAYER_H;
+  player.velocity.x = 0;
+  player.velocity.y = 0;
+  player.grounded = true;
+
+  world.entities = world.entities.filter((e) => e.id === 'player');
+  world.entities[0]!.position.x = player.position.x;
+  world.entities[0]!.position.y = player.position.y;
+  world.entities[0]!.velocity!.x = 0;
+  world.entities[0]!.velocity!.y = 0;
+  for (const b of blocks) {
+    addEntity(world, {
+      id: b.id,
+      position: { x: b.x, y: b.y, z: 0 },
+      type: 'block',
+      data: { size: { x: b.w, y: b.h, z: 1 }, material_type: b.material_type },
+    });
+  }
+
+  if (levelCompleteOverlay) levelCompleteOverlay.style.display = 'none';
+  if (shopOverlay) shopOverlay.style.display = 'none';
+}
+
+function showLevelCompleteOverlay(wrapper: HTMLElement): void {
+  if (levelCompleteOverlay) {
+    levelCompleteOverlay.style.display = 'flex';
+    const title = levelCompleteOverlay.querySelector('.level-complete-title') as HTMLElement;
+    const sub = levelCompleteOverlay.querySelector('.level-complete-sub') as HTMLElement;
+    const nextBtn = levelCompleteOverlay.querySelector('.level-complete-next') as HTMLButtonElement;
+    const isLast = currentLevelIndex >= LEVELS.length - 1;
+    title.textContent = isLast ? 'All levels complete!' : `Level ${currentLevelIndex + 1} complete!`;
+    sub.textContent = `Stars collected. Mega coins saved to your balance.`;
+    nextBtn.textContent = isLast ? 'Play again' : 'Next level';
+    return;
+  }
+  const overlay = document.createElement('div');
+  overlay.className = 'level-complete-overlay';
+  overlay.style.cssText = `
+    position: absolute; inset: 0; background: rgba(15,23,42,0.9); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; z-index: 200; gap: 16px;
+  `;
+  const title = document.createElement('div');
+  title.className = 'level-complete-title';
+  title.style.cssText = 'font-size: 28px; font-weight: bold; color: #fbbf24;';
+  const sub = document.createElement('div');
+  sub.className = 'level-complete-sub';
+  sub.style.cssText = 'color: #94a3b8; font-size: 14px;';
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display: flex; gap: 12px; margin-top: 8px;';
+  const nextBtn = document.createElement('button');
+  nextBtn.className = 'level-complete-next';
+  nextBtn.textContent = 'Next level';
+  nextBtn.style.cssText = 'padding: 12px 24px; font-size: 16px; cursor: pointer; background: #22c55e; color: #fff; border: none; border-radius: 8px;';
+  const shopBtn = document.createElement('button');
+  shopBtn.textContent = 'Shop';
+  shopBtn.style.cssText = 'padding: 12px 24px; font-size: 16px; cursor: pointer; background: #6366f1; color: #fff; border: none; border-radius: 8px;';
+  nextBtn.addEventListener('click', () => {
+    if (currentLevelIndex >= LEVELS.length - 1) loadLevel(wrapper, 0);
+    else loadLevel(wrapper, currentLevelIndex + 1);
+  });
+  shopBtn.addEventListener('click', () => {
+    if (levelCompleteOverlay) levelCompleteOverlay.style.display = 'none';
+    showShop(wrapper);
+  });
+  btnRow.appendChild(nextBtn);
+  btnRow.appendChild(shopBtn);
+  overlay.appendChild(title);
+  overlay.appendChild(sub);
+  overlay.appendChild(btnRow);
+  wrapper.appendChild(overlay);
+  levelCompleteOverlay = overlay;
+  title.textContent = `Level ${currentLevelIndex + 1} complete!`;
+  sub.textContent = `Stars collected. Mega coins saved to your balance.`;
+}
+
+function showShop(wrapper: HTMLElement): void {
+  if (shopOverlay) {
+    shopOverlay.style.display = 'flex';
+    (shopOverlay.querySelector('.shop-coins') as HTMLElement).textContent = `Mega coins: ${getMegaCoins()}`;
+    (shopOverlay.querySelector('.shop-super') as HTMLElement).textContent = getUpgrades().superPack ? 'Super Pack (owned)' : `Super Pack — Fly 40% higher (${SUPER_PACK_COST} mega coins)`;
+    return;
+  }
+  const overlay = document.createElement('div');
+  overlay.className = 'shop-overlay';
+  overlay.style.cssText = `
+    position: absolute; inset: 0; background: rgba(15,23,42,0.95); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; z-index: 210; gap: 20px;
+  `;
+  const title = document.createElement('div');
+  title.textContent = 'Shop';
+  title.style.cssText = 'font-size: 24px; font-weight: bold; color: #e2e8f0;';
+  const coinsEl = document.createElement('div');
+  coinsEl.className = 'shop-coins';
+  coinsEl.textContent = `Mega coins: ${getMegaCoins()}`;
+  coinsEl.style.cssText = 'color: #fbbf24; font-size: 18px;';
+  const superEl = document.createElement('div');
+  superEl.className = 'shop-super';
+  superEl.style.cssText = 'color: #94a3b8;';
+  const buyBtn = document.createElement('button');
+  buyBtn.textContent = 'Buy Super Pack';
+  buyBtn.style.cssText = 'padding: 12px 24px; font-size: 16px; cursor: pointer; background: #6366f1; color: #fff; border: none; border-radius: 8px;';
+  buyBtn.addEventListener('click', () => {
+    if (getUpgrades().superPack) return;
+    if (spendMegaCoins(SUPER_PACK_COST)) {
+      setSuperPackOwned(true);
+      applyUpgrades();
+      superEl.textContent = 'Super Pack (owned)';
+      coinsEl.textContent = `Mega coins: ${getMegaCoins()}`;
+      buyBtn.disabled = true;
+    }
+  });
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = 'Close';
+  closeBtn.style.cssText = 'padding: 10px 20px; font-size: 14px; cursor: pointer; background: #475569; color: #fff; border: none; border-radius: 6px;';
+  closeBtn.addEventListener('click', () => {
+    shopOverlay!.style.display = 'none';
+    if (levelCompleteShown && levelCompleteOverlay) levelCompleteOverlay.style.display = 'flex';
+  });
+  overlay.appendChild(title);
+  overlay.appendChild(coinsEl);
+  overlay.appendChild(superEl);
+  overlay.appendChild(buyBtn);
+  overlay.appendChild(closeBtn);
+  wrapper.appendChild(overlay);
+  shopOverlay = overlay;
+  superEl.textContent = getUpgrades().superPack ? 'Super Pack (owned)' : `Super Pack — Fly 40% higher (${SUPER_PACK_COST} mega coins)`;
+  buyBtn.disabled = getUpgrades().superPack;
+}
 
 /** Returns the block directly beneath the player (the one they're standing on or landing on). */
 function getBlockBeneathPlayer(): Block | undefined {
@@ -256,31 +435,6 @@ export function startGame1(mount: HTMLElement): () => void {
     name: 'Player',
   });
 
-  blocks = [
-    new Block({ id: 'plat_1', x: 4, y: GROUND_Y, w: 6, h: 0.8, material_type: 'normal' }),
-    new Block({ id: 'plat_2', x: 14, y: GROUND_Y, w: 4, h: 0.8, material_type: 'ice' }),
-    new Block({ id: 'plat_3', x: 10, y: 3, w: 3, h: 0.6, material_type: 'slime' }),
-    new Block({ id: 'plat_4', x: 20, y: 2, w: 5, h: 0.6, material_type: 'normal' }),
-    new Block({ id: 'plat_5', x: 26, y: GROUND_Y, w: 8, h: 0.8, material_type: 'ice' }),
-    new Block({ id: 'plat_6', x: -6, y: 2.5, w: 4, h: 0.6, material_type: 'slime' }),
-  ];
-
-  score = 0;
-  fuel = FUEL_MAX;
-  exhaustAccum = 0;
-  stars = [
-    { id: 's1', x: 7, y: 4.5, collected: false },
-    { id: 's2', x: 12, y: 4, collected: false },
-    { id: 's3', x: 11.5, y: 5.5, collected: false },
-    { id: 's4', x: 22, y: 5, collected: false },
-    { id: 's5', x: 28, y: 4, collected: false },
-    { id: 's6', x: -4, y: 5.5, collected: false },
-    { id: 's7', x: 17, y: 6, collected: false },
-    { id: 's8', x: 0, y: 8, collected: false },
-  ];
-  breakParticles = [];
-  exhaustParticles = [];
-
   world = createWorld();
   addEntity(world, {
     id: 'player',
@@ -288,14 +442,8 @@ export function startGame1(mount: HTMLElement): () => void {
     velocity: { ...player.velocity },
     type: 'player',
   });
-  for (const b of blocks) {
-    addEntity(world, {
-      id: b.id,
-      position: { x: b.x, y: b.y, z: 0 },
-      type: 'block',
-      data: { size: { x: b.w, y: b.h, z: 1 }, material_type: b.material_type },
-    });
-  }
+
+  applyUpgrades();
 
   const wrapper = document.createElement('div');
   wrapper.style.cssText = 'position: relative;';
@@ -312,6 +460,14 @@ export function startGame1(mount: HTMLElement): () => void {
   camera = createCamera(canvas.width, canvas.height, 28);
 
   cleanupHotbar = createHotbar(wrapper, inventory);
+
+  const shopBtn = document.createElement('button');
+  shopBtn.textContent = 'Shop';
+  shopBtn.style.cssText = 'position: absolute; top: 10px; right: 158px; z-index: 60; padding: 4px 10px; font-size: 12px; cursor: pointer; background: #6366f1; color: #fff; border: none; border-radius: 4px;';
+  shopBtn.addEventListener('click', () => showShop(wrapper));
+  wrapper.appendChild(shopBtn);
+
+  loadLevel(wrapper, 0);
 
   startGameLoop({
     update(dt) {
@@ -393,6 +549,22 @@ export function startGame1(mount: HTMLElement): () => void {
           score += 100;
           feedback.onSelect();
         }
+      }
+
+      for (const mc of megaCoins) {
+        if (mc.collected) continue;
+        const dx = player.position.x - mc.x;
+        const dy = player.position.y - PLAYER_H * 0.5 - mc.y;
+        if (Math.sqrt(dx * dx + dy * dy) < PLAYER_W * 0.6 + MEGA_COIN_RADIUS) {
+          mc.collected = true;
+          addMegaCoins(1);
+          feedback.onPlace();
+        }
+      }
+
+      if (stars.every((s) => s.collected) && !levelCompleteShown) {
+        levelCompleteShown = true;
+        showLevelCompleteOverlay(wrapper);
       }
 
       exhaustAccum += dt;
@@ -503,6 +675,26 @@ export function startGame1(mount: HTMLElement): () => void {
         ctx.fillText('★', sx, sy + bounce);
       }
 
+      for (const mc of megaCoins) {
+        if (mc.collected) continue;
+        const { sx, sy } = worldToScreen(camera, mc.x, mc.y, true);
+        const r = MEGA_COIN_RADIUS * camera.pixelsPerUnit;
+        const bounce = Math.sin(gameTime * 2.5 + 1) * 4;
+        const pulse = 1 + 0.15 * Math.sin(gameTime * 4);
+        ctx.fillStyle = '#a78bfa';
+        ctx.strokeStyle = '#7c3aed';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(sx, sy + bounce, r * pulse, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#fbbf24';
+        ctx.font = `bold ${Math.round(r * 1.2)}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('◆', sx, sy + bounce);
+      }
+
       let scaleX = 1;
       let scaleY = 1;
       if (landSquashTime > 0) {
@@ -524,14 +716,16 @@ export function startGame1(mount: HTMLElement): () => void {
 
       const blockBeneath = getBlockBeneathPlayer();
       ctx.fillStyle = 'rgba(0,0,0,0.7)';
-      ctx.fillRect(0, 0, w, 44);
+      ctx.fillRect(0, 0, w, 48);
       ctx.fillStyle = '#e2e8f0';
       ctx.font = '14px system-ui';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
-      ctx.fillText('← → move · Space boost (double boost in air) · E place · Q break · 1–5 hotbar', 12, 8);
+      ctx.fillText(`Level ${currentLevelIndex + 1}/${LEVELS.length}: ${LEVELS[currentLevelIndex]?.name ?? ''}`, 12, 8);
       ctx.fillStyle = '#fbbf24';
-      ctx.fillText(`★ Score: ${score}`, 12, 24);
+      ctx.fillText(`★ ${score}`, 12, 24);
+      ctx.fillStyle = '#a78bfa';
+      ctx.fillText(`◆ Mega: ${getMegaCoins()}`, 80, 24);
       const fuelPct = Math.max(0, Math.min(1, fuel));
       ctx.fillStyle = '#334155';
       ctx.fillRect(w - 152, 8, 140, 12);
@@ -553,5 +747,8 @@ export function startGame1(mount: HTMLElement): () => void {
   return () => {
     stopGameLoop();
     cleanupHotbar?.();
+    shopBtn.remove();
+    levelCompleteOverlay?.remove();
+    shopOverlay?.remove();
   };
 }
